@@ -3,7 +3,6 @@ package deej
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -50,7 +49,7 @@ func (d *Deej) recoverFromPanic() {
 	crashlogPath := filepath.Join(logDirectory, fmt.Sprintf(crashlogFilename, now.Format(crashlogTimestampFormat)))
 
 	// that would REALLY suck
-	if err := ioutil.WriteFile(crashlogPath, crashlogBytes.Bytes(), os.ModePerm); err != nil {
+	if err := os.WriteFile(crashlogPath, crashlogBytes.Bytes(), os.ModePerm); err != nil {
 		panic(fmt.Errorf("can't even write the crashlog file contents: %w", err))
 	}
 

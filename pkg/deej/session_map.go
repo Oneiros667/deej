@@ -23,6 +23,8 @@ type sessionMap struct {
 
 	lastSessionRefresh time.Time
 	unmappedSessions   []Session
+
+	//lightingEventsChannel chan LightingChangeEvent
 }
 
 const (
@@ -81,6 +83,7 @@ func (m *sessionMap) initialize() error {
 
 	m.setupOnConfigReload()
 	m.setupOnSliderMove()
+	m.setupOnMuteChecks()
 
 	return nil
 }
@@ -145,6 +148,84 @@ func (m *sessionMap) setupOnSliderMove() {
 			case event := <-sliderEventsChannel:
 				m.handleSliderMoveEvent(event)
 			}
+		}
+	}()
+}
+
+func (m *sessionMap) updateMuteStatus(idx int, sessions []string) {
+
+	lce := LightingChangeEvent{
+		SliderID: idx,
+		Lighting: On,
+	}
+
+	// if m.deej.Verbose() {
+	// 	m.logger.Debugw("Start Mute Checks: ", "idx", idx, "sessions", sessions)
+	// }
+
+	// for each possible target for this slider...
+	for _, target := range sessions {
+
+		resolvedTargets := m.resolveTarget(target)
+
+		var sessionsMuted int
+		var sessionsOn int
+
+		// for each resolved target...
+		for _, resolvedTarget := range resolvedTargets {
+
+			sessions, ok := m.get(resolvedTarget)
+
+			if !ok {
+				lce.Lighting = Off
+				continue
+			}
+
+			for _, session := range sessions {
+				if session.GetMute() {
+					sessionsMuted++
+				} else {
+					sessionsOn++
+				}
+			}
+
+			if sessionsMuted == 0 && sessionsOn == 0 {
+				lce.Lighting = Off
+			} else if sessionsMuted > 0 && sessionsOn == 0 {
+				lce.Lighting = Pulse
+			} else if sessionsMuted == 0 && sessionsOn > 0 {
+				lce.Lighting = On
+			} else {
+				lce.Lighting = Flash
+			}
+		}
+
+		m.sendLightingEvent(lce)
+	}
+
+}
+
+func (m *sessionMap) setupOnMuteChecks() {
+
+	go func() {
+		for {
+			time.Sleep(100 * time.Millisecond)
+			// if m.deej.Verbose() {
+			// 	m.logger.Debug("Start Mute Checks")
+			// }
+
+			// first of all, ensure our session map isn't moldy
+			if m.lastSessionRefresh.Add(maxTimeBetweenSessionRefreshes).Before(time.Now()) {
+				m.logger.Debug("Stale session map detected on slider move, refreshing")
+				m.refreshSessions(true)
+			}
+
+			// get the targets mapped to this slider from the config
+			m.deej.config.SliderMapping.iterate(m.updateMuteStatus)
+
+			// if m.deej.Verbose() {
+			// 	m.logger.Debug("End Mute Checks")
+			// }
 		}
 	}()
 }
@@ -224,6 +305,47 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 
 	targetFound := false
 	adjustmentFailed := false
+	sessionMuteState := true
+
+	if event.ButtonDown {
+
+		sessionsMuted := 0
+		sessionsOn := 0
+
+		// Get Mute settings for each possible target for this slider
+		for _, target := range targets {
+
+			// resolve the target name by cleaning it up and applying any special transformations.
+			// depending on the transformation applied, this can result in more than one target name
+			resolvedTargets := m.resolveTarget(target)
+
+			// for each resolved target...
+			for _, resolvedTarget := range resolvedTargets {
+
+				// check the map for matching sessions
+				sessions, ok := m.get(resolvedTarget)
+
+				// no sessions matching this target - move on
+				if !ok {
+					continue
+				}
+
+				targetFound = true
+
+				for _, session := range sessions {
+					if session.GetMute() {
+						sessionsMuted++
+					} else {
+						sessionsOn++
+					}
+				}
+			}
+		}
+
+		if sessionsOn > 0 && sessionsMuted == 0 {
+			sessionMuteState = false
+		}
+	}
 
 	// for each possible target for this slider...
 	for _, target := range targets {
@@ -253,6 +375,13 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 						adjustmentFailed = true
 					}
 				}
+
+				if event.ButtonDown {
+					if err := session.SetMute(!sessionMuteState); err != nil {
+						m.logger.Warnw("Failed to set target session mute", "error", err)
+						adjustmentFailed = true
+					}
+				}
 			}
 		}
 	}
@@ -269,6 +398,8 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 		// (or another, more catastrophic failure happens)
 		m.refreshSessions(true)
 	}
+
+	// ToDo: Publish new LED states
 }
 
 func (m *sessionMap) targetHasSpecialTransform(target string) bool {
@@ -360,6 +491,11 @@ func (m *sessionMap) clear() {
 	}
 
 	m.logger.Debug("Session map cleared")
+}
+
+func (m *sessionMap) sendLightingEvent(event LightingChangeEvent) {
+	m.deej.serial.SendLightChange(event)
+	//m.lightingEventsChannel <- event
 }
 
 func (m *sessionMap) String() string {

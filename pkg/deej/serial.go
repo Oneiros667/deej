@@ -18,8 +18,8 @@ import (
 
 // SerialIO provides a deej-aware abstraction layer to managing serial I/O
 type SerialIO struct {
-	comPort  string
-	baudRate uint
+	//comPort  string
+	//baudRate uint
 
 	deej   *Deej
 	logger *zap.SugaredLogger
@@ -31,14 +31,33 @@ type SerialIO struct {
 
 	lastKnownNumSliders        int
 	currentSliderPercentValues []float32
+	currentButtonStates        []bool
 
 	sliderMoveConsumers []chan SliderMoveEvent
+	lightingLogger      *zap.SugaredLogger
+	serialWriter        *bufio.Writer
 }
 
 // SliderMoveEvent represents a single slider move captured by deej
 type SliderMoveEvent struct {
 	SliderID     int
 	PercentValue float32
+	ButtonDown   bool
+}
+
+type Lighting int
+
+const (
+	Off Lighting = iota
+	On
+	Pulse
+	Flash
+)
+
+type LightingChangeEvent struct {
+	SliderID int
+	//PercentValue float32
+	Lighting Lighting
 }
 
 var expectedLinePattern = regexp.MustCompile(`^\d{1,4}(\|\d{1,4})*\r\n$`)
@@ -55,6 +74,8 @@ func NewSerialIO(deej *Deej, logger *zap.SugaredLogger) (*SerialIO, error) {
 		connected:           false,
 		conn:                nil,
 		sliderMoveConsumers: []chan SliderMoveEvent{},
+		serialWriter:        nil,
+		lightingLogger:      nil,
 	}
 
 	logger.Debug("Created serial i/o instance")
@@ -109,9 +130,14 @@ func (sio *SerialIO) Start() error {
 	namedLogger.Infow("Connected", "conn", sio.conn)
 	sio.connected = true
 
+	sio.lightingLogger = sio.logger.Named(strings.ToLower("Lights"))
+
+	sio.serialWriter = bufio.NewWriter(sio.conn)
+
 	// read lines or await a stop
 	go func() {
 		connReader := bufio.NewReader(sio.conn)
+		connReader.Reset(sio.conn)
 		lineChannel := sio.readLine(namedLogger, connReader)
 
 		for {
@@ -125,6 +151,44 @@ func (sio *SerialIO) Start() error {
 	}()
 
 	return nil
+}
+
+func (sio *SerialIO) SendLightChange(light LightingChangeEvent) {
+
+	if sio.deej.Verbose() {
+		sio.lightingLogger.Debugw("Got new light", "light", light)
+	}
+
+	s := fmt.Sprintf("%d|%d\n", light.SliderID, light.Lighting)
+
+	if sio.deej.Verbose() {
+		sio.lightingLogger.Debugw("Sending", "s", s)
+	}
+
+	_, err := sio.serialWriter.WriteString(s)
+	if err != nil {
+
+		if sio.deej.Verbose() {
+			sio.lightingLogger.Warnw("Failed to write line to serial", "error", err, "s", s)
+		}
+	}
+	// else {
+	// 	if sio.deej.Verbose() {
+	// 		sio.lightingLogger.Debugw("Wrote bytes", "len", len)
+	// 		//	sio.lightingLogger.Debugw("Buffered", "Buffered", sio.serialWriter.Buffered())
+	// 	}
+	// }
+
+	err2 := sio.serialWriter.Flush()
+	if err2 != nil {
+		if sio.deej.Verbose() {
+			sio.lightingLogger.Warnw("Failed to flush buffer", "error", err2)
+		}
+	}
+	// else if sio.deej.Verbose() {
+	// 	sio.lightingLogger.Debugw("Flushed buffer")
+	// }
+
 }
 
 // Stop signals us to shut down our serial connection, if one is active
@@ -218,8 +282,15 @@ func (sio *SerialIO) readLine(logger *zap.SugaredLogger, reader *bufio.Reader) c
 				logger.Debugw("Read new line", "line", line)
 			}
 
-			// deliver the line to the channel
-			ch <- line
+			debugPos := strings.Index(line, "DEBUG:")
+
+			if debugPos > -1 {
+				logger.Debugw("SER_DBG", "line", line)
+			} else {
+				// deliver the line to the channel
+				ch <- line
+			}
+
 		}
 	}()
 
@@ -247,10 +318,12 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 		logger.Infow("Detected sliders", "amount", numSliders)
 		sio.lastKnownNumSliders = numSliders
 		sio.currentSliderPercentValues = make([]float32, numSliders)
+		sio.currentButtonStates = make([]bool, numSliders)
 
 		// reset everything to be an impossible value to force the slider move event later
 		for idx := range sio.currentSliderPercentValues {
 			sio.currentSliderPercentValues[idx] = -1.0
+			sio.currentButtonStates[idx] = false
 		}
 	}
 
@@ -258,8 +331,17 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 	moveEvents := []SliderMoveEvent{}
 	for sliderIdx, stringValue := range splitLine {
 
+		//sio.logger.Debugw("Got line from serial:", "line", line)
 		// convert string values to integers ("1023" -> 1023)
 		number, _ := strconv.Atoi(stringValue)
+
+		var buttonDown bool = false
+
+		if number > 1023 {
+			buttonDown = true
+			number = number - 1024
+			//sio.logger.Debugw("Button down", "idx", sliderIdx, "line", line)
+		}
 
 		// turns out the first line could come out dirty sometimes (i.e. "4558|925|41|643|220")
 		// so let's check the first number for correctness just in case
@@ -280,19 +362,21 @@ func (sio *SerialIO) handleLine(logger *zap.SugaredLogger, line string) {
 		}
 
 		// check if it changes the desired state (could just be a jumpy raw slider value)
-		if util.SignificantlyDifferent(sio.currentSliderPercentValues[sliderIdx], normalizedScalar, sio.deej.config.NoiseReductionLevel) {
+		if util.SignificantlyDifferent(sio.currentSliderPercentValues[sliderIdx], normalizedScalar, sio.deej.config.NoiseReductionLevel) || buttonDown != sio.currentButtonStates[sliderIdx] {
 
 			// if it does, update the saved value and create a move event
 			sio.currentSliderPercentValues[sliderIdx] = normalizedScalar
+			sio.currentButtonStates[sliderIdx] = buttonDown
 
 			moveEvents = append(moveEvents, SliderMoveEvent{
 				SliderID:     sliderIdx,
 				PercentValue: normalizedScalar,
+				ButtonDown:   buttonDown,
 			})
 
-			if sio.deej.Verbose() {
-				logger.Debugw("Slider moved", "event", moveEvents[len(moveEvents)-1])
-			}
+			// if sio.deej.Verbose() {
+			// 	logger.Debugw("Slider moved", "event", moveEvents[len(moveEvents)-1])
+			// }
 		}
 	}
 

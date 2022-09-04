@@ -1,150 +1,224 @@
 package deej
 
 import (
+	"errors"
 	"fmt"
-	"net"
+
+	"go.uber.org/zap"
 
 	"github.com/jfreymuth/pulse/proto"
-	"go.uber.org/zap"
 )
 
-type paSessionFinder struct {
-	logger        *zap.SugaredLogger
-	sessionLogger *zap.SugaredLogger
+// normal PulseAudio volume (100%)
+const maxVolume = 0x10000
+
+var errNoSuchProcess = errors.New("No such process")
+
+type paSession struct {
+	baseSession
+
+	processName string
 
 	client *proto.Client
-	conn   net.Conn
+
+	sinkInputIndex    uint32
+	sinkInputChannels byte
 }
 
-func newSessionFinder(logger *zap.SugaredLogger) (SessionFinder, error) {
-	client, conn, err := proto.Connect("")
-	if err != nil {
-		logger.Warnw("Failed to establish PulseAudio connection", "error", err)
-		return nil, fmt.Errorf("establish PulseAudio connection: %w", err)
-	}
+type masterSession struct {
+	baseSession
 
-	request := proto.SetClientName{
-		Props: proto.PropList{
-			"application.name": proto.PropListString("deej"),
-		},
-	}
-	reply := proto.SetClientNameReply{}
+	client *proto.Client
 
-	if err := client.Request(&request, &reply); err != nil {
-		return nil, err
-	}
-
-	sf := &paSessionFinder{
-		logger:        logger.Named("session_finder"),
-		sessionLogger: logger.Named("sessions"),
-		client:        client,
-		conn:          conn,
-	}
-
-	sf.logger.Debug("Created PA session finder instance")
-
-	return sf, nil
+	streamIndex    uint32
+	streamChannels byte
+	isOutput       bool
 }
 
-func (sf *paSessionFinder) GetAllSessions() ([]Session, error) {
-	sessions := []Session{}
+func newPASession(
+	logger *zap.SugaredLogger,
+	client *proto.Client,
+	sinkInputIndex uint32,
+	sinkInputChannels byte,
+	processName string,
+) *paSession {
 
-	// get the master sink session
-	masterSink, err := sf.getMasterSinkSession()
-	if err == nil {
-		sessions = append(sessions, masterSink)
+	s := &paSession{
+		client:            client,
+		sinkInputIndex:    sinkInputIndex,
+		sinkInputChannels: sinkInputChannels,
+	}
+
+	s.processName = processName
+	s.name = processName
+	s.humanReadableDesc = processName
+
+	// use a self-identifying session name e.g. deej.sessions.chrome
+	s.logger = logger.Named(s.Key())
+	s.logger.Debugw(sessionCreationLogMessage, "session", s)
+
+	return s
+}
+
+func newMasterSession(
+	logger *zap.SugaredLogger,
+	client *proto.Client,
+	streamIndex uint32,
+	streamChannels byte,
+	isOutput bool,
+) *masterSession {
+
+	s := &masterSession{
+		client:         client,
+		streamIndex:    streamIndex,
+		streamChannels: streamChannels,
+		isOutput:       isOutput,
+	}
+
+	var key string
+
+	if isOutput {
+		key = masterSessionName
 	} else {
-		sf.logger.Warnw("Failed to get master audio sink session", "error", err)
+		key = inputSessionName
 	}
 
-	// get the master source session
-	masterSource, err := sf.getMasterSourceSession()
-	if err == nil {
-		sessions = append(sessions, masterSource)
-	} else {
-		sf.logger.Warnw("Failed to get master audio source session", "error", err)
-	}
+	s.logger = logger.Named(key)
+	s.master = true
+	s.name = key
+	s.humanReadableDesc = key
 
-	// enumerate sink inputs and add sessions along the way
-	if err := sf.enumerateAndAddSessions(&sessions); err != nil {
-		sf.logger.Warnw("Failed to enumerate audio sessions", "error", err)
-		return nil, fmt.Errorf("enumerate audio sessions: %w", err)
-	}
+	s.logger.Debugw(sessionCreationLogMessage, "session", s)
 
-	return sessions, nil
+	return s
 }
 
-func (sf *paSessionFinder) Release() error {
-	if err := sf.conn.Close(); err != nil {
-		sf.logger.Warnw("Failed to close PulseAudio connection", "error", err)
-		return fmt.Errorf("close PulseAudio connection: %w", err)
+func (s *paSession) GetVolume() float32 {
+	request := proto.GetSinkInputInfo{
+		SinkInputIndex: s.sinkInputIndex,
+	}
+	reply := proto.GetSinkInputInfoReply{}
+
+	if err := s.client.Request(&request, &reply); err != nil {
+		s.logger.Warnw("Failed to get session volume", "error", err)
 	}
 
-	sf.logger.Debug("Released PA session finder instance")
+	level := parseChannelVolumes(reply.ChannelVolumes)
+
+	return level
+}
+
+func (s *paSession) SetVolume(v float32) error {
+	volumes := createChannelVolumes(s.sinkInputChannels, v)
+	request := proto.SetSinkInputVolume{
+		SinkInputIndex: s.sinkInputIndex,
+		ChannelVolumes: volumes,
+	}
+
+	if err := s.client.Request(&request, nil); err != nil {
+		s.logger.Warnw("Failed to set session volume", "error", err)
+		return fmt.Errorf("adjust session volume: %w", err)
+	}
+
+	s.logger.Debugw("Adjusting session volume", "to", fmt.Sprintf("%.2f", v))
 
 	return nil
 }
 
-func (sf *paSessionFinder) getMasterSinkSession() (Session, error) {
-	request := proto.GetSinkInfo{
-		SinkIndex: proto.Undefined,
-	}
-	reply := proto.GetSinkInfoReply{}
-
-	if err := sf.client.Request(&request, &reply); err != nil {
-		sf.logger.Warnw("Failed to get master sink info", "error", err)
-		return nil, fmt.Errorf("get master sink info: %w", err)
-	}
-
-	// create the master sink session
-	sink := newMasterSession(sf.sessionLogger, sf.client, reply.SinkIndex, reply.Channels, true)
-
-	return sink, nil
+func (s *paSession) Release() {
+	s.logger.Debug("Releasing audio session")
 }
 
-func (sf *paSessionFinder) getMasterSourceSession() (Session, error) {
-	request := proto.GetSourceInfo{
-		SourceIndex: proto.Undefined,
-	}
-	reply := proto.GetSourceInfoReply{}
-
-	if err := sf.client.Request(&request, &reply); err != nil {
-		sf.logger.Warnw("Failed to get master source info", "error", err)
-		return nil, fmt.Errorf("get master source info: %w", err)
-	}
-
-	// create the master source session
-	source := newMasterSession(sf.sessionLogger, sf.client, reply.SourceIndex, reply.Channels, false)
-
-	return source, nil
+func (s *paSession) String() string {
+	return fmt.Sprintf(sessionStringFormat, s.humanReadableDesc, s.GetVolume())
 }
 
-func (sf *paSessionFinder) enumerateAndAddSessions(sessions *[]Session) error {
-	request := proto.GetSinkInputInfoList{}
-	reply := proto.GetSinkInputInfoListReply{}
+func (s *masterSession) GetVolume() float32 {
+	var level float32
 
-	if err := sf.client.Request(&request, &reply); err != nil {
-		sf.logger.Warnw("Failed to get sink input list", "error", err)
-		return fmt.Errorf("get sink input list: %w", err)
-	}
+	if s.isOutput {
+		request := proto.GetSinkInfo{
+			SinkIndex: s.streamIndex,
+		}
+		reply := proto.GetSinkInfoReply{}
 
-	for _, info := range reply {
-		name, ok := info.Properties["application.process.binary"]
-
-		if !ok {
-			sf.logger.Warnw("Failed to get sink input's process name",
-				"sinkInputIndex", info.SinkInputIndex)
-
-			continue
+		if err := s.client.Request(&request, &reply); err != nil {
+			s.logger.Warnw("Failed to get session volume", "error", err)
+			return 0
 		}
 
-		// create the deej session object
-		newSession := newPASession(sf.sessionLogger, sf.client, info.SinkInputIndex, info.Channels, name.String())
+		level = parseChannelVolumes(reply.ChannelVolumes)
+	} else {
+		request := proto.GetSourceInfo{
+			SourceIndex: s.streamIndex,
+		}
+		reply := proto.GetSourceInfoReply{}
 
-		// add it to our slice
-		*sessions = append(*sessions, newSession)
+		if err := s.client.Request(&request, &reply); err != nil {
+			s.logger.Warnw("Failed to get session volume", "error", err)
+			return 0
+		}
 
+		level = parseChannelVolumes(reply.ChannelVolumes)
 	}
 
+	return level
+}
+
+func (s *masterSession) SetVolume(v float32) error {
+	var request proto.RequestArgs
+
+	volumes := createChannelVolumes(s.streamChannels, v)
+
+	if s.isOutput {
+		request = &proto.SetSinkVolume{
+			SinkIndex:      s.streamIndex,
+			ChannelVolumes: volumes,
+		}
+	} else {
+		request = &proto.SetSourceVolume{
+			SourceIndex:    s.streamIndex,
+			ChannelVolumes: volumes,
+		}
+	}
+
+	if err := s.client.Request(request, nil); err != nil {
+		s.logger.Warnw("Failed to set session volume",
+			"error", err,
+			"volume", v)
+
+		return fmt.Errorf("adjust session volume: %w", err)
+	}
+
+	s.logger.Debugw("Adjusting session volume", "to", fmt.Sprintf("%.2f", v))
+
 	return nil
+}
+
+func (s *masterSession) Release() {
+	s.logger.Debug("Releasing audio session")
+}
+
+func (s *masterSession) String() string {
+	return fmt.Sprintf(sessionStringFormat, s.humanReadableDesc, s.GetVolume())
+}
+
+func createChannelVolumes(channels byte, volume float32) []uint32 {
+	volumes := make([]uint32, channels)
+
+	for i := range volumes {
+		volumes[i] = uint32(volume * maxVolume)
+	}
+
+	return volumes
+}
+
+func parseChannelVolumes(volumes []uint32) float32 {
+	var level uint32
+
+	for _, volume := range volumes {
+		level += volume
+	}
+
+	return float32(level) / float32(len(volumes)) / float32(maxVolume)
 }
