@@ -5,6 +5,7 @@ go 1.19
 
 require (
 	git.tcp.direct/kayos/sendkeys v0.0.0-20211216174833-565f782ccf21 // indirect
+	github.com/Oneiros667/deej v0.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.5.4 // indirect
 	github.com/gen2brain/beeep v0.0.0-20220909211152-5a9ec94374f6 // indirect
 	github.com/getlantern/context v0.0.0-20190109183933-c447772a6520 // indirect
