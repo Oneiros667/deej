@@ -4,8 +4,8 @@ import (
 	"flag"
 	"fmt"
 
-	//"github.com/omriharel/deej"
-	"github.com/Oneiros667/deej"
+	"github.com/omriharel/deej"
+	//"github.com/Oneiros667/deej"
 )
 
 var (

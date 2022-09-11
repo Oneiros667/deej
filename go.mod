@@ -1,8 +1,7 @@
-module github.com/Oneiros667/deej
+//module github.com/Oneiros667/deej
+module github.com/omriharel/deej
 
 go 1.19
-
-require github.com/go-ole/go-ole v1.2.6
 
 require (
 	git.tcp.direct/kayos/sendkeys v0.0.0-20211216174833-565f782ccf21 // indirect
@@ -15,6 +14,7 @@ require (
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
 	github.com/getlantern/systray v1.2.1 // indirect
+	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
