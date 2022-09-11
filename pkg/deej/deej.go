@@ -32,7 +32,7 @@ type Deej struct {
 	version     string
 	verbose     bool
 
-	kbw *KBWrap
+	kbw *sendkeys.KBWrap
 }
 
 // NewDeej creates a Deej instance

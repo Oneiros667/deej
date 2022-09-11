@@ -8,7 +8,7 @@ import (
 	"time"
 
 	//"github.com/lxn/win"
-
+	"git.tcp.direct/kayos/sendkeys"
 	"github.com/Oneiros667/deej/pkg/deej/util"
 	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
@@ -26,7 +26,7 @@ type sessionMap struct {
 	lastSessionRefresh time.Time
 	unmappedSessions   []Session
 
-	kbw *KBWrap
+	kbw *sendkeys.KBWrap
 
 	//lightingEventsChannel chan LightingChangeEvent
 }
@@ -78,7 +78,7 @@ const (
 // this matches friendly device names (on Windows), e.g. "Headphones (Realtek Audio)"
 var deviceSessionKeyPattern = regexp.MustCompile(`^.+ \(.+\)$`)
 
-func newSessionMap(deej *Deej, logger *zap.SugaredLogger, sessionFinder SessionFinder, kbw *KBWrap) (*sessionMap, error) {
+func newSessionMap(deej *Deej, logger *zap.SugaredLogger, sessionFinder SessionFinder, kbw *sendkeys.KBWrap) (*sessionMap, error) {
 	logger = logger.Named("sessions")
 
 	m := &sessionMap{
@@ -322,8 +322,8 @@ func (m *sessionMap) PlayPause() {
 
 	//r := win.SendMessage(h, WM_APPCOMMAND, uintptr(h), uintptr(win.MAKELONG(0, APPCOMMAND_MEDIA_PLAY_PAUSE)))
 	//m.logger.Debug(r)
-
-	m.kbw.Type(179)
+	s := string([]byte{179})
+	m.kbw.Type(s)
 }
 
 func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
