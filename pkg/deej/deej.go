@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"os"
 
+	"go.uber.org/zap"
+
 	"git.tcp.direct/kayos/sendkeys"
 
 	"github.com/Oneiros667/deej/pkg/deej/util"
-	"go.uber.org/zap"
 	//"github.com/Oneiros667/deej/pkg/deej/util"
 )
 
