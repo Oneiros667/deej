@@ -1,5 +1,5 @@
-module github.com/omriharel/deej
+module github.com/Oneiros667/deej
 
-go 1.17
+go 1.19
 
 

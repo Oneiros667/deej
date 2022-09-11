@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Oneiros667/deejoni/pkg/deej/util/sendkeys"
+	"github.com/Oneiros667/deej/pkg/deej/util/sendkeys"
 
-	"github.com/Oneiros667/deejoni/pkg/deej/util"
+	"github.com/Oneiros667/deej/pkg/deej/util"
 	"go.uber.org/zap"
 	//"github.com/Oneiros667/deej/pkg/deej/util"
 )
