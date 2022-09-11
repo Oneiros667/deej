@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 
-	"go.uber.org/zap"
+	"github.com/Oneiros667/deejoni/pkg/deej/util/sendkeys"
 
-	"github.com/omriharel/deej/pkg/deej/util"
+	"github.com/Oneiros667/deejoni/pkg/deej/util"
+	"go.uber.org/zap"
+	//"github.com/Oneiros667/deej/pkg/deej/util"
 )
 
 const (
@@ -29,6 +31,8 @@ type Deej struct {
 	stopChannel chan bool
 	version     string
 	verbose     bool
+
+	kbw *KBWrap
 }
 
 // NewDeej creates a Deej instance
@@ -47,12 +51,15 @@ func NewDeej(logger *zap.SugaredLogger, verbose bool) (*Deej, error) {
 		return nil, fmt.Errorf("create new Config: %w", err)
 	}
 
+	kbw, err := sendkeys.NewKBWrapWithOptions(sendkeys.NoDelay)
+
 	d := &Deej{
 		logger:      logger,
 		notifier:    notifier,
 		config:      config,
 		stopChannel: make(chan bool),
 		verbose:     verbose,
+		kbw:         kbw,
 	}
 
 	serial, err := NewSerialIO(d, logger)
@@ -69,7 +76,7 @@ func NewDeej(logger *zap.SugaredLogger, verbose bool) (*Deej, error) {
 		return nil, fmt.Errorf("create new SessionFinder: %w", err)
 	}
 
-	sessions, err := newSessionMap(d, logger, sessionFinder)
+	sessions, err := newSessionMap(d, logger, sessionFinder, kbw)
 	if err != nil {
 		logger.Errorw("Failed to create sessionMap", "error", err)
 		return nil, fmt.Errorf("create new sessionMap: %w", err)

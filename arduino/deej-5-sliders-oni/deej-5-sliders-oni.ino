@@ -1,111 +1,179 @@
 // General
-const int DELAY = 100;
+// Log debug messages to Serial
+const bool DEBUG = false;
+// Delay between loops
+const int DELAY = 25;
+//const int DELAY = 250;
+//const int SLEEP = 1000;
+// LED to use for certain debug indicators
+const int DEBUG_LED = 13;
+// How long to wait before stopping sending slider and button info,
+// after last message was recieved
+const unsigned long RX_TIMEOUT = 5000;
+
 
 // Sliders Settings
-const int NUM_SLIDERS = 5;
-const int channelAnalogInputs[NUM_SLIDERS] = { A1, A2, A3, A4, 0}; 
-const int channelButtonInputs[NUM_SLIDERS] = { 11, 8, 7, 4, 2 }; 
-const int channelLedOutputs[NUM_SLIDERS] = { 10, 9, 6, 5, 3 }; 
+const int NUM_SLIDERS = 4;
+const int channelAnalogInputs[NUM_SLIDERS] = { A2, A3, A1, A0 };
+const int channelButtonInputs[NUM_SLIDERS] = { 8, 4, 2, 7 };
+const int channelLedOutputs[NUM_SLIDERS] = { 9, 5, 3, 6 };
 
-const int flashTime = 500;
-const int flashMin = 0;
-const int flashMax = 200;
 
-const int pulseMin = 0;
-const int pulseMax = 180;
-const int pulseCycle = 25;
-const int pulseStep = 20;
+// Button Settings
+const int NUM_BUTTONS = 4;
+const int singleButtonInputs[NUM_BUTTONS] = { 18, 19, 11, 10 };
 
-// const int NUM_PAIRS = 1;
-// const int pairedButtonInputs[NUM_PAIRS] = { 2};
-// const int pairedLedOutputs[NUM_PAIRS] = { 3};
+// MIN & MAX lighting levels
+const int MIN = 0;
+const int MAX = 10;
 
-// Button Settings - MAX 16
-// const int NUM_BUTTONS = 0;
-// const int singleButtonInputs[NUM_BUTTONS] = {}; 
+// How many milliseconds does one lighting cycle last
+const int LIGHT_CYCLE = 1600;
+// How many times in a cycle should lighting be updated - will affect fade smoothness
+// and steps of Pulse mode LED's
+const int LIGHT_STEPS = 10;  // Shouldn't be smaller than MAX
+// At what level between 0 and 1 in the cycle does the flash toggle state
+const float FLASH_TRIGGER = 0.5;
 
-//LED Settings - MAX 16
-// const int NUM_LEDS = 0;
-// const int  singleLedOutputs[NUM_LEDS] = {}; 
+// Current cycle / brighness level
+float cycleLevel = 0;
 
-int flashLeds = 0;
-int flashLevel = 0;
-unsigned long nextFlashChange = 0;
-
+// PULSE MODE:  Fading in and out / breathing with brighness scaling linearly
+//              up and down in one cycle
+// Current number of LEDs on Pulse mode
 int pulseLeds = 0;
-int pulseLevel = 0; 
-int currentPulseStep = pulseStep;
-unsigned long nextPulseChange = 0;
+// current Pulse mode brightness level
+int pulseLevel = 0;
 
+// FLASH MODE:  Turns LED's on when cycleLevel reaches FLASH_TRIGGER as it
+//              increases, then turns back of when cycleLevel falls below
+//              FLASH_TRIGGER level
+// Current number of LEDs on Flash mode
+int flashLeds = 0;
+// current Flash mode brightness level (Either MIN or MAX)
+int flashLevel = 0;
+
+// When next lighting changes should be applied
+unsigned long nextLightChange = 0;
+// last checked milliseconds since boot
 unsigned long currentMillis = 0;
+// last received message time
+unsigned long lastMessage = 0;
 
-int channelLedLighting[NUM_SLIDERS] = { 0, 0, 0, 0}; 
 
+// Current Slider Values
+int channelSliderValues[NUM_SLIDERS + NUM_BUTTONS];
+// Current Button States
+int buttonCurrentState[NUM_SLIDERS + NUM_BUTTONS];
+// Current LED Lighting State
+int channelLedLighting[NUM_SLIDERS] = { 0, 0, 0, 0 };
+// 0 - Off:   No Sessions bound to the computer side mapping
+// 1 - On:    Mapping is Master or has sessions, and no sessions are muted
+// 2 - Pulse: Mapping is Master or has sessions, ans all sessions muted
+// 3 - Flash: Mapping has multiple sessions, but they are mixed muted / unmuted
 
+// Variables to store incoming LED messages
 String incomingLEDState;
 int ledIdx;
 int ledLighting;
 int lastLighting;
 int seperatorPos;
 
-// Slider Variables
-int channelSliderValues[NUM_SLIDERS];
-
-// Button variables
-int buttonCurrentState[NUM_SLIDERS];
-
-int reading; 
+// Variables to store button state readings
+int reading;
 int tempVal;
+bool active;
 
-void setup() { 
+void setup() {
+  // Initialise PINs
+  // Debug LED
+  pinMode(DEBUG_LED, OUTPUT);
 
-  pinMode(13, OUTPUT);
 
+  // Slider / Button / LED Combos
+  // Analog inputs
   for (int i = 0; i < NUM_SLIDERS; i++) {
     pinMode(channelAnalogInputs[i], INPUT);
   }
 
+  // Button inputs
   for (int i = 0; i < NUM_SLIDERS; i++) {
     pinMode(channelButtonInputs[i], INPUT_PULLUP);
   }
 
+  // LEDs using PWM to control brightness
   for (int i = 0; i < NUM_SLIDERS; i++) {
     pinMode(channelLedOutputs[i], OUTPUT);
   }
 
-  for (int i = 0; i < NUM_SLIDERS; i++) {
-    digitalWrite(channelLedOutputs[i], HIGH);
-    delay(100);
-    digitalWrite(channelLedOutputs[i], LOW);
+  // Single Button inputs
+  for (int i = 0; i < NUM_BUTTONS; i++) {
+    pinMode(singleButtonInputs[i], INPUT_PULLUP);
   }
 
+  // Ready flash
+  delay(240);
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < NUM_SLIDERS; i++) {
+      analogWrite(channelLedOutputs[i], MAX * 0.4);
+    }
+    delay(240);
+    for (int i = NUM_SLIDERS - 1; i >= 0; i--) {
+      analogWrite(channelLedOutputs[i], MIN);
+    }
+    delay(200);
+  }
+
+  // Start Serial comms
   Serial.begin(9600);
-
-  // for(int thisButton = 0; thisButton < NUM_BUTTONS; thisButton++){
-  //   buttonLastState[thisButton] = 0;
-  //   buttonLastBounceTime[thisButton] = 0;
-  // }
-
-  for(int thisLED = 0; thisLED < NUM_SLIDERS; thisLED++){
-    digitalWrite(channelLedOutputs[thisLED], LOW);
-  }
 }
 
 void loop() {
-  updateSliderValues();
-  updateButtonValues();
-  sendSliderValues(); // Actually send data (all the time)
-  //printSliderValues(); // For debug
 
-  readLedInputs();
+  // Read available incoming data
+  if (Serial.available() > 0) {
+    readLedInputs();
+  }
 
-  delay(DELAY);
+  // Dont send if we haven't heard from the computer in RX_TIMEOUT sec
+  //if (lastMessage + RX_TIMEOUT > millis()) {
+  if (true) {
+
+    if ((pulseLeds > 0 || flashLeds > 0) && (nextLightChange < millis())) {
+      updateLedStates();
+    }
+
+    updateSliderValues();
+    updateButtonValues();
+    sendSliderValues();  // Actually send data (all the time)
+    //printSliderValues(); // For debug
+
+    // Wait until next loop time
+    delay(DELAY);
+  } else {
+    // Display 'waiting' pattern to indicate no data is being received from PC
+    for (int i = 0; i < NUM_SLIDERS - 1; i++) {
+      analogWrite(channelLedOutputs[i], MIN);
+    }
+
+    for (int i = 0; i < NUM_SLIDERS - 1; i++) {
+      analogWrite(channelLedOutputs[i], MAX * 0.2);
+      delay(400);
+      analogWrite(channelLedOutputs[i], MIN);
+    }
+    for (int i = NUM_SLIDERS - 1; i >= 1; i--) {
+      analogWrite(channelLedOutputs[i], MAX * 0.2);
+      delay(400);
+      analogWrite(channelLedOutputs[i], MIN);
+    }
+    //delay(SLEEP);
+  }
 }
 
 void updateSliderValues() {
   // for each slider
   for (int i = 0; i < NUM_SLIDERS; i++) {
-    if(channelAnalogInputs[i] == 0){
+    if (channelAnalogInputs[i] == 0) {
       channelSliderValues[i] = 0;
     } else {
       channelSliderValues[i] = analogRead(channelAnalogInputs[i]);
@@ -114,175 +182,219 @@ void updateSliderValues() {
 }
 
 void updateButtonValues() {
-  //buttonState = 0;
   // Loop through each button
   for (int i = 0; i < NUM_SLIDERS; i++) {
     buttonCurrentState[i] = digitalRead(channelButtonInputs[i]);
   }
+
+  for (int i = 0; i < NUM_BUTTONS; i++) {
+
+
+    buttonCurrentState[NUM_SLIDERS + i] = digitalRead(singleButtonInputs[i]);
+
+    // String builtString = String(i);
+    // bool val = digitalRead(singleButtonInputs[i]);
+    // builtString += String((int)val);
+    // Serial.print(builtString);
   }
+  //Serial.println();
+}
 
 void sendSliderValues() {
 
   String builtString = String("");
 
-  // Buttons linked to sliders
+  //Buttons linked to sliders
   for (int i = 0; i < NUM_SLIDERS; i++) {
     int tempVal = (int)channelSliderValues[i];
-    if(NUM_SLIDERS > i){
-      if(buttonCurrentState[i] == LOW){ // Use LOW for INPUT_PULLUP
-        tempVal = tempVal + 1024;   // Set byte 11 to 1
+    if (NUM_SLIDERS > i) {
+      if (buttonCurrentState[i] == LOW) {  // Use LOW for INPUT_PULLUP
+        tempVal = tempVal + 1024;          // Set byte 11 to 1
       }
     }
 
     builtString += String((int)tempVal);
-    
+
     if (i < NUM_SLIDERS - 1) {
       builtString += String("|");
     }
-    
   }
 
-  
-  
-  
-  
+  if (NUM_SLIDERS > 0 && NUM_BUTTONS > 0) {
+    builtString += String("|");
+  }
+
+  if (NUM_BUTTONS > 0) {
+    for (int i = NUM_SLIDERS; i < NUM_SLIDERS + NUM_BUTTONS; i++) {
+      //builtString += String(i);
+      if (buttonCurrentState[i] == LOW) {  // Use LOW for INPUT_PULLUP
+        builtString += String((int)1024);                // Set byte 11 to 1
+      } else {
+        builtString += String((int)0);
+      }
+      if (i < NUM_SLIDERS + NUM_BUTTONS - 1) {
+        builtString += String("|");
+      }
+    }
+  }
+
   builtString += (String());
 
   Serial.println(builtString);
 }
 
 
-void readLedInputs(){
-  if(Serial.available() > 0){
+void readLedInputs() {
 
-    digitalWrite(13, HIGH);
+  digitalWrite(DEBUG_LED, HIGH);
 
+  // Read all the waiting messages, else we only read one message per loop
+  while (Serial.available() > 0) {
+
+    lastMessage = millis();
     incomingLEDState = Serial.readStringUntil('\n');
     seperatorPos = incomingLEDState.indexOf('|');
-    ledIdx = incomingLEDState.substring(0,seperatorPos).toInt();
+    ledIdx = incomingLEDState.substring(0, seperatorPos).toInt();
 
-    if(ledIdx < 0 || ledIdx >= NUM_SLIDERS){
+    // Ignore out of range sliders
+    if (ledIdx < 0 || ledIdx >= NUM_SLIDERS) {
       return;
     }
 
     ledLighting = incomingLEDState.substring(seperatorPos + 1).toInt();
-    
-    if(ledLighting < 0){
+
+    // Limit to valid values
+    if (ledLighting < 0) {
       ledLighting = 0;
-    }
-    else if(ledLighting > 3){
+    } else if (ledLighting > 3) {
       ledLighting = 1;
     }
 
+    // Determine if LED Lighting state has changed from last value
     lastLighting = channelLedLighting[ledIdx];
-    if(ledLighting != lastLighting){
+    if (ledLighting != lastLighting) {
 
-      if(lastLighting == 2){
-        pulseLeds = pulseLeds - 1;
-        if(pulseLeds < 0){
+      debug(String("LED CHANGE: ") + String(ledIdx) + String(" = ") + String(channelLedLighting[ledIdx]) + String(" -> ") + String(ledLighting));
+
+      // Decrement counts for dynamic lights
+      if (lastLighting == 2) {
+        pulseLeds--;
+        if (pulseLeds < 0) {
           pulseLeds = 0;
         }
-      } 
-      else if(lastLighting == 3){
-        flashLeds = flashLeds - 1;
-        if(flashLeds < 0){
+      } else if (lastLighting == 3) {
+        flashLeds--;
+        if (flashLeds < 0) {
           flashLeds = 0;
         }
       }
 
-      if(ledLighting == 0){
-        analogWrite(channelLedOutputs[ledIdx], 0);
-      } 
-      else if(ledLighting == 1){
-        analogWrite(channelLedOutputs[ledIdx], 255);
-      } 
-      else if(ledLighting == 2){
-        pulseLeds = pulseLeds + 1;
-        if(pulseLeds > NUM_SLIDERS){
+      // Set static lighting
+      if (ledLighting == 0) {
+        analogWrite(channelLedOutputs[ledIdx], MIN);
+      } else if (ledLighting == 1) {
+        analogWrite(channelLedOutputs[ledIdx], MAX);
+      }
+      // Set Dynamic lighting
+      else if (ledLighting == 2) {
+        pulseLeds++;
+        if (pulseLeds > NUM_SLIDERS) {
           pulseLeds = NUM_SLIDERS;
         }
-        if(pulseLeds == 1){
-          nextFlashChange = 0;
-          flashLevel = flashMax;
-        }
-      } 
-      else if(ledLighting == 3){
-        flashLeds = flashLeds + 1;
-        if(flashLeds > NUM_SLIDERS){
+      } else if (ledLighting == 3) {
+        flashLeds++;
+        if (flashLeds > NUM_SLIDERS) {
           flashLeds = NUM_SLIDERS;
-        }
-        if(flashLeds == 1){
-          nextPulseChange = 0;
-          pulseLevel = 0;
-          currentPulseStep = pulseStep;
         }
       }
     }
 
     channelLedLighting[ledIdx] = ledLighting;
-
-    digitalWrite(13, LOW);
-
   }
 
-  if (pulseLeds == 0 && flashLeds == 0){
-    return;
+  digitalWrite(DEBUG_LED, LOW);
+}
+
+void updateLedStates() {
+
+  debug(String("updateLedStates"));
+
+  for (int i = 0; i < NUM_SLIDERS; i++) {
+    debug(String("LED STATUS: ") + String(i) + String(" = ") + String(channelLedLighting[i]));
   }
 
   currentMillis = millis();
 
-  if (pulseLeds > 0){
-    if (nextPulseChange < currentMillis){
+  // Cycle climbs from 0 to max haflway through cycle, then down again, linearly
+  // Get current cycle level as if scaled once to max at the end of the cycle
+  cycleLevel = (currentMillis % LIGHT_CYCLE) / (float)LIGHT_CYCLE;
+  debug(String("LED CL B: ") + String(cycleLevel));
 
-      pulseLevel = pulseLevel + currentPulseStep;
+  // Double the scale of the level so that it peaks halway through
+  cycleLevel = cycleLevel * 2;
+  debug(String("LED CL S: ") + String(cycleLevel));
 
-      for (int i = 0; i < NUM_SLIDERS; i++) {
-        if(channelLedLighting[i] == 2){
-          analogWrite(channelLedOutputs[i], pulseLevel);
-        }
+  // Flip the value going over the max back down
+  if (cycleLevel > 1) {
+    cycleLevel = cycleLevel - (cycleLevel - 1) * 2;
+  }
+  debug(String("LED CL F: ") + String(cycleLevel));
+
+  if (pulseLeds > 0) {
+    // Set pulse brightness level relative to MAX
+    pulseLevel = MAX * cycleLevel;
+
+    for (int i = 0; i < NUM_SLIDERS; i++) {
+      if (channelLedLighting[i] == 2) {
+        analogWrite(channelLedOutputs[i], pulseLevel);
       }
-      if(pulseLevel > pulseMax || pulseLevel < pulseMin){
-        currentPulseStep = -currentPulseStep;
-      }
-      nextPulseChange = currentMillis + pulseCycle;
     }
   }
-    
-  if (flashLeds > 0){
 
-    if (nextFlashChange < currentMillis){
+  if (flashLeds > 0) {
 
-      if(flashLevel == flashMin){
-        flashLevel = flashMax;
-        
-      }
-      else {
-        flashLevel = flashMin;
-      }
+    // Toggle between flash states
+    if (cycleLevel >= FLASH_TRIGGER && flashLevel == MIN) {
 
+      flashLevel = MAX;
       for (int i = 0; i < NUM_SLIDERS; i++) {
-        if(channelLedLighting[i] == 3){
+        if (channelLedLighting[i] == 3) {
           analogWrite(channelLedOutputs[i], flashLevel);
         }
       }
-      nextFlashChange = currentMillis + flashTime;
+
+    } else if (cycleLevel < FLASH_TRIGGER && flashLevel == MAX) {
+
+      flashLevel = MIN;
+      for (int i = 0; i < NUM_SLIDERS; i++) {
+        if (channelLedLighting[i] == 3) {
+          analogWrite(channelLedOutputs[i], flashLevel);
+        }
+      }
     }
   }
 
-    
-  
+  nextLightChange = currentMillis + (LIGHT_CYCLE / LIGHT_STEPS);
+}
 
+// Send Debug info over the Serial interface
+void debug(String s) {
+  if (!DEBUG) {
+    return;
+  }
 
+  String debugMessage = String("DEBUG: ") + s;
+  Serial.write(debugMessage.c_str());
+  Serial.write("\n");
 }
 
 void printSliderValues() {
-  for (int i = 0; i < NUM_SLIDERS; i++) {
+  for (int i = 0; i < NUM_SLIDERS + NUM_BUTTONS; i++) {
     tempVal = channelSliderValues[i];
-    if(tempVal >= 1024){
+    if (tempVal >= 1024) {
       String printedString = String("Slider #") + String(i + 1) + String(": ") + String(tempVal - 1024) + String(" mV ") + String("DOWN");
       Serial.write(printedString.c_str());
-    }
-    else {
+    } else {
       String printedString = String("Slider #") + String(i + 1) + String(": ") + String(tempVal) + String(" mV ") + String("UP");
       Serial.write(printedString.c_str());
     }

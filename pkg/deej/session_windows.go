@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	ole "github.com/go-ole/go-ole"
+	//"github.com/lxn/win"
 	ps "github.com/mitchellh/go-ps"
 	wca "github.com/moutend/go-wca"
 
@@ -36,14 +37,6 @@ type masterSession struct {
 
 	stale bool // when set to true, we should refresh sessions on the next call to SetVolume
 }
-
-const (
-	// Windows Code for WM_APPCOMMAND
-	WM_APPCOMMAND uint32 = 0x0319
-
-	//
-	APPCOMMAND_MEDIA_PLAY_PAUSE = 14
-)
 
 func newWCASession(
 	logger *zap.SugaredLogger,
