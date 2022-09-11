@@ -1,10 +1,9 @@
 package deej
 
 import (
-	"github.com/getlantern/systray"
-
 	"github.com/Oneiros667/deej/pkg/deej/icon"
 	"github.com/Oneiros667/deej/pkg/deej/util"
+	"github.com/getlantern/systray"
 )
 
 func (d *Deej) initializeTray(onDone func()) {
