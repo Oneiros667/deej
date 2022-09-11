@@ -17,7 +17,10 @@ require (
 	go.uber.org/zap v1.22.0
 )
 
+require github.com/micmonay/keybd_event v1.1.1 // indirect
+
 require (
+	git.tcp.direct/kayos/sendkeys v0.0.0-20211216174833-565f782ccf21
 	github.com/getlantern/context v0.0.0-20220418194847-3d5e7a086201 // indirect
 	github.com/getlantern/errors v1.0.1 // indirect
 	github.com/getlantern/golog v0.0.0-20211223150227-d4d95a44d873 // indirect

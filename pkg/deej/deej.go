@@ -10,6 +10,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/omriharel/deej/pkg/deej/util"
+
+	//"git.tcp.direct/kayos/sendkeys"
+	"github.com/micmonay/keybd_event"
 )
 
 const (
@@ -29,10 +32,12 @@ type Deej struct {
 	stopChannel chan bool
 	version     string
 	verbose     bool
+
+	kb keybd_event.KeyBonding
 }
 
 // NewDeej creates a Deej instance
-func NewDeej(logger *zap.SugaredLogger, verbose bool) (*Deej, error) {
+func NewDeej(logger *zap.SugaredLogger, kb keybd_event.KeyBonding, verbose bool) (*Deej, error) {
 	logger = logger.Named("deej")
 
 	notifier, err := NewToastNotifier(logger)
@@ -53,6 +58,7 @@ func NewDeej(logger *zap.SugaredLogger, verbose bool) (*Deej, error) {
 		config:      config,
 		stopChannel: make(chan bool),
 		verbose:     verbose,
+		kb:          kb,
 	}
 
 	serial, err := NewSerialIO(d, logger)
@@ -69,7 +75,7 @@ func NewDeej(logger *zap.SugaredLogger, verbose bool) (*Deej, error) {
 		return nil, fmt.Errorf("create new SessionFinder: %w", err)
 	}
 
-	sessions, err := newSessionMap(d, logger, sessionFinder)
+	sessions, err := newSessionMap(d, logger, sessionFinder, kb)
 	if err != nil {
 		logger.Errorw("Failed to create sessionMap", "error", err)
 		return nil, fmt.Errorf("create new sessionMap: %w", err)

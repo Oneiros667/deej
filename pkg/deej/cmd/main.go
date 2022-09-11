@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/micmonay/keybd_event"
 	"github.com/omriharel/deej/pkg/deej"
 )
 
@@ -42,8 +43,13 @@ func main() {
 		named.Debug("Verbose flag provided, all log messages will be shown")
 	}
 
+	kb, err := keybd_event.NewKeyBonding()
+	if err != nil {
+		panic(err)
+	}
+
 	// create the deej instance
-	d, err := deej.NewDeej(logger, verbose)
+	d, err := deej.NewDeej(logger, kb, verbose)
 	if err != nil {
 		named.Fatalw("Failed to create deej object", "error", err)
 	}

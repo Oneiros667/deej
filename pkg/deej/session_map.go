@@ -10,6 +10,10 @@ import (
 	"github.com/omriharel/deej/pkg/deej/util"
 	"github.com/thoas/go-funk"
 	"go.uber.org/zap"
+
+	//"git.tcp.direct/kayos/sendkeys"
+
+	"github.com/micmonay/keybd_event"
 )
 
 type sessionMap struct {
@@ -24,7 +28,7 @@ type sessionMap struct {
 	lastSessionRefresh time.Time
 	unmappedSessions   []Session
 
-	//lightingEventsChannel chan LightingChangeEvent
+	kb keybd_event.KeyBonding
 }
 
 const (
@@ -41,6 +45,12 @@ const (
 
 	// targets all currently unmapped sessions (experimental)
 	specialTargetAllUnmapped = "unmapped"
+
+	// special target for unassigned channels
+	specialTargetNone = "none"
+
+	// special target for Pay/Pause Windows event
+	specialTargetPlayPause = "playpause"
 
 	// this threshold constant assumes that re-acquiring all sessions is a kind of expensive operation,
 	// and needs to be limited in some manner. this value was previously user-configurable through a config
@@ -59,7 +69,7 @@ const (
 // this matches friendly device names (on Windows), e.g. "Headphones (Realtek Audio)"
 var deviceSessionKeyPattern = regexp.MustCompile(`^.+ \(.+\)$`)
 
-func newSessionMap(deej *Deej, logger *zap.SugaredLogger, sessionFinder SessionFinder) (*sessionMap, error) {
+func newSessionMap(deej *Deej, logger *zap.SugaredLogger, sessionFinder SessionFinder, kb keybd_event.KeyBonding) (*sessionMap, error) {
 	logger = logger.Named("sessions")
 
 	m := &sessionMap{
@@ -68,6 +78,7 @@ func newSessionMap(deej *Deej, logger *zap.SugaredLogger, sessionFinder SessionF
 		m:             make(map[string][]Session),
 		lock:          &sync.Mutex{},
 		sessionFinder: sessionFinder,
+		//kbw:           kbw,
 	}
 
 	logger.Debug("Created session map instance")
@@ -287,6 +298,36 @@ func (m *sessionMap) sessionMapped(session Session) bool {
 	return matchFound
 }
 
+// func (m *sessionMap) PlayPause1() {
+// 	playPauseCommand := string([]byte{179})
+// 	m.kb.Type(playPauseCommand)
+// 	//m.kbw.Type("AAA")
+// }
+
+func (m *sessionMap) PlayPause() {
+	m.kb.Clear()
+	m.kb.SetKeys(keybd_event.VK_MEDIA_PLAY_PAUSE)
+	m.kb.Press()
+	time.Sleep(10 * time.Millisecond)
+	m.kb.Release()
+}
+
+func (m *sessionMap) NextTrack() {
+	m.kb.Clear()
+	m.kb.SetKeys(keybd_event.VK_MEDIA_NEXT_TRACK)
+	m.kb.Press()
+	time.Sleep(10 * time.Millisecond)
+	m.kb.Release()
+}
+
+func (m *sessionMap) PreviousTrack() {
+	m.kb.Clear()
+	m.kb.SetKeys(keybd_event.VK_MEDIA_PREV_TRACK)
+	m.kb.Press()
+	time.Sleep(10 * time.Millisecond)
+	m.kb.Release()
+}
+
 func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 
 	// first of all, ensure our session map isn't moldy
@@ -298,21 +339,94 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 	// get the targets mapped to this slider from the config
 	targets, ok := m.deej.config.SliderMapping.get(event.SliderID)
 
+	for _, target := range targets {
+		m.logger.Debug(target)
+
+	}
+
 	// if slider not found in config, silently ignore
 	if !ok {
 		return
 	}
 
-	targetFound := false
-	adjustmentFailed := false
-	sessionMuteState := true
+	if targets[0] == "deej.previous" {
 
-	if event.ButtonDown {
+		m.logger.Debug("Previous")
+		// Send PreviousTrack event
+		if event.ButtonDown {
+			m.logger.Debug("Previous Button Down")
+			m.PreviousTrack()
+		}
 
-		sessionsMuted := 0
-		sessionsOn := 0
+	} else if targets[0] == "deej.playpause" {
 
-		// Get Mute settings for each possible target for this slider
+		m.logger.Debug("Play/Pause")
+		// Send PlayPause event
+		if event.ButtonDown {
+			m.logger.Debug("Play/Pause Button Down")
+			m.PlayPause()
+		}
+
+	} else if targets[0] == "deej.next" {
+
+		m.logger.Debug("Next")
+		// Send NextTrack event
+		if event.ButtonDown {
+			m.logger.Debug("Next Button Down")
+			m.NextTrack()
+		}
+
+	} else if targets[0] == "deej.nothing" {
+
+		return
+
+	} else {
+
+		targetFound := false
+		adjustmentFailed := false
+		sessionMuteState := true
+
+		if event.ButtonDown {
+
+			sessionsMuted := 0
+			sessionsOn := 0
+
+			// Get Mute settings for each possible target for this slider
+			for _, target := range targets {
+
+				// resolve the target name by cleaning it up and applying any special transformations.
+				// depending on the transformation applied, this can result in more than one target name
+				resolvedTargets := m.resolveTarget(target)
+
+				// for each resolved target...
+				for _, resolvedTarget := range resolvedTargets {
+
+					// check the map for matching sessions
+					sessions, ok := m.get(resolvedTarget)
+
+					// no sessions matching this target - move on
+					if !ok {
+						continue
+					}
+
+					targetFound = true
+
+					for _, session := range sessions {
+						if session.GetMute() {
+							sessionsMuted++
+						} else {
+							sessionsOn++
+						}
+					}
+				}
+			}
+
+			if sessionsOn > 0 && sessionsMuted == 0 {
+				sessionMuteState = false
+			}
+		}
+
+		// for each possible target for this slider...
 		for _, target := range targets {
 
 			// resolve the target name by cleaning it up and applying any special transformations.
@@ -332,74 +446,39 @@ func (m *sessionMap) handleSliderMoveEvent(event SliderMoveEvent) {
 
 				targetFound = true
 
+				// iterate all matching sessions and adjust the volume of each one
 				for _, session := range sessions {
-					if session.GetMute() {
-						sessionsMuted++
-					} else {
-						sessionsOn++
+					if session.GetVolume() != event.PercentValue {
+						if err := session.SetVolume(event.PercentValue); err != nil {
+							m.logger.Warnw("Failed to set target session volume", "error", err)
+							adjustmentFailed = true
+						}
+					}
+
+					if event.ButtonDown {
+						if err := session.SetMute(!sessionMuteState); err != nil {
+							m.logger.Warnw("Failed to set target session mute", "error", err)
+							adjustmentFailed = true
+						}
 					}
 				}
 			}
 		}
 
-		if sessionsOn > 0 && sessionsMuted == 0 {
-			sessionMuteState = false
+		// if we still haven't found a target or the volume adjustment failed, maybe look for the target again.
+		// processes could've opened since the last time this slider moved.
+		// if they haven't, the cooldown will take care to not spam it up
+		if !targetFound {
+			m.refreshSessions(false)
+		} else if adjustmentFailed {
+
+			// performance: the reason that forcing a refresh here is okay is that we'll only get here
+			// when a session's SetVolume call errored, such as in the case of a stale master session
+			// (or another, more catastrophic failure happens)
+			m.refreshSessions(true)
 		}
 	}
 
-	// for each possible target for this slider...
-	for _, target := range targets {
-
-		// resolve the target name by cleaning it up and applying any special transformations.
-		// depending on the transformation applied, this can result in more than one target name
-		resolvedTargets := m.resolveTarget(target)
-
-		// for each resolved target...
-		for _, resolvedTarget := range resolvedTargets {
-
-			// check the map for matching sessions
-			sessions, ok := m.get(resolvedTarget)
-
-			// no sessions matching this target - move on
-			if !ok {
-				continue
-			}
-
-			targetFound = true
-
-			// iterate all matching sessions and adjust the volume of each one
-			for _, session := range sessions {
-				if session.GetVolume() != event.PercentValue {
-					if err := session.SetVolume(event.PercentValue); err != nil {
-						m.logger.Warnw("Failed to set target session volume", "error", err)
-						adjustmentFailed = true
-					}
-				}
-
-				if event.ButtonDown {
-					if err := session.SetMute(!sessionMuteState); err != nil {
-						m.logger.Warnw("Failed to set target session mute", "error", err)
-						adjustmentFailed = true
-					}
-				}
-			}
-		}
-	}
-
-	// if we still haven't found a target or the volume adjustment failed, maybe look for the target again.
-	// processes could've opened since the last time this slider moved.
-	// if they haven't, the cooldown will take care to not spam it up
-	if !targetFound {
-		m.refreshSessions(false)
-	} else if adjustmentFailed {
-
-		// performance: the reason that forcing a refresh here is okay is that we'll only get here
-		// when a session's SetVolume call errored, such as in the case of a stale master session
-		// (or another, more catastrophic failure happens)
-		m.refreshSessions(true)
-	}
-
-	// ToDo: Publish new LED states
 }
 
 func (m *sessionMap) targetHasSpecialTransform(target string) bool {

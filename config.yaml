@@ -11,6 +11,10 @@ slider_mapping:
   1: firefox.exe
   2: mstsc.exe
   3: deej.unmapped
+  4: deej.previous
+  5: deej.playpause
+  6: deej.next
+
 
 # set this to true if you want the controls inverted (i.e. top is 0%, bottom is 100%)
 invert_sliders: false
